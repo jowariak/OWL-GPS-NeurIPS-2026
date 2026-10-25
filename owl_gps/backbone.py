@@ -5,6 +5,8 @@ legacy-compatible timm/mmcv stack and the matching pretrained checkpoints.
 Imports are intentionally confined to this optional module.
 """
 from functools import partial
+import numbers
+from typing import List, Optional, Union
 from math import cos, pi
 import logging
 import numpy as np

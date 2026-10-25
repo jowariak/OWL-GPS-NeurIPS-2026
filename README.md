@@ -2,33 +2,97 @@
 
 **Adapting Actively on the Fly: Relevance-Guided Sequential Learning with Latent Concepts for Geospatial Discovery**
 
-**NeurIPS 2026**
-
-Jowaria Khan · Anindya Sarkar · Yevgeniy Vorobeychik · Elizabeth Bondi-Kelly
+**NeurIPS 2026** · Jowaria Khan, Anindya Sarkar, Yevgeniy Vorobeychik, Elizabeth Bondi-Kelly
 
 [Project page](https://jowariak.github.io/OWL-GPS/) · [Paper](https://jowariak.github.io/OWL-GPS/paper.pdf)
 
-## Overview
+OWL-GPS studies budgeted sequential geospatial discovery under sparse
+supervision, distribution shift, and bounded replay memory. Its shared
+concept-relevance representation guides both *where to acquire labels* and
+*which acquired observations to use for online adaptation*.
 
-OWL-GPS is a framework for **sequential geospatial discovery** when labels are expensive, acquisition budgets are limited, and previously observed examples cannot be retained indefinitely. Candidate regions are visible to the acquisition policy, but their labels are revealed only after querying.
+## Repository structure
 
-The framework uses a shared, concept-based relevance representation for two coupled decisions:
+| Path | Purpose |
+| --- | --- |
+| `owl_gps/backbone.py` | Original single-band Temporal ViT and feature neck |
+| `owl_gps/heads.py` | Original dual-head MMSeg segmentation decoder |
+| `owl_gps/relevance.py` | Original relevance encoder, relevance sampling and Gram–Schmidt |
+| `owl_gps/model.py` | Concept fusion and original 2019-model builder |
+| `owl_gps/data.py` | Aligned band TIFFs, pseudo-labels and measured labels |
+| `owl_gps/acquisition.py` | Label-blind concept-guided query scoring |
+| `owl_gps/memory.py` | Core/reservoir replay memory and relevance-structured meta-batches |
+| `owl_gps/adaptation.py` | Direct Adam updates on acquired relevance-structured batches |
+| `owl_gps/losses.py` | Binary focal loss and relevance CVAE KL loss |
+| `owl_gps/metrics.py` | Evaluation at measured pixels only |
+| `configs/2019.example.yaml` | Portable path/budget configuration template |
+| `examples/synthetic_demo.py` | Small CPU end-to-end smoke demonstration |
+| `tests/test_components.py` | Deterministic unit tests |
+| `docs/REPRODUCIBILITY.md` | Reproduction requirements and implementation differences |
 
-- **Relevance-guided acquisition:** selecting regions to query using learned concept relevance together with prediction uncertainty and exploration–exploitation criteria.
-- **Relevance-aware bounded-memory meta-batches:** selecting diverse, informative observations from core and reservoir memory to support online model adaptation.
+## Install
 
-In the evaluated implementation, online adaptation optimizes the model directly over the relevance-structured batch, including newly acquired supervision, rather than performing a separate bilevel meta-gradient update.
+Requires Python 3.10+ and PyTorch.
 
-## Evaluation
+```bash
+python -m pip install -e .
+python -m unittest discover -s tests -v
+python examples/synthetic_demo.py
+```
 
-The primary evaluation studies PFAS contamination discovery using sparsely observed measurements. An additional sparsified land-cover prediction task tests cross-domain applicability.
+The synthetic example uses a **toy model and synthetic labels**. Its losses
+are not PFAS measurements or evidence of the published experimental scores.
 
-## Code and reproducibility
+For GeoTIFF loading:
 
-This repository is being prepared for the official code release. Installation instructions, dataset preparation, training and inference commands, and configuration details will be added together with the verified release files.
+```bash
+python -m pip install -e ".[geo]"
+```
 
-Large datasets and model checkpoints will be hosted separately where appropriate; avoid committing data, credentials, and generated checkpoints to this repository.
+The original heavy encoder and decoder use **legacy timm/MMCV/MMSeg APIs**.
+Install versions compatible with your model checkpoints separately. See
+`docs/REPRODUCIBILITY.md` before attempting the original 2019 backbone.
+For example, the model constructor needs 33 original pretrained concept
+checkpoints, in concept order:
+
+```python
+from owl_gps.model import build_original_2019_model
+
+with open("/path/to/concept_checkpoints.txt", encoding="utf-8") as f:
+    paths = [line.strip() for line in f if line.strip()]
+model = build_original_2019_model(paths)
+```
+
+Provide local dataset paths and normalization statistics through configuration,
+not hardcoded `/scratch` or `/nfs` strings. No raw data or model weights are
+committed to this repository.
+
+## Method notes
+
+- The implemented online update optimizes directly over acquired
+  relevance-structured **meta-batches**, rather than computing bilevel
+  meta-gradients or a separate newest-sample gradient.
+- Newly acquired observations enter bounded memory before batch construction.
+- Labels must remain hidden from acquisition until the query is made.
+- Pseudo-labels may train the model, but reported evaluations should use
+  independent measured ground-truth pixels.
+
+## Current release status
+
+**Modular research-code preparation, not yet an exact reproduction of the
+NeurIPS experiments.** Core architecture definitions have been carried over
+from the author's earlier `OWL-GPS_NeurIPS` script. Several pieces have been
+cleaned or made safer, including removal of code paths that accessed hidden
+candidate labels. Batch representative selection and optimizer scheduling
+are not identical to the historical script. The release still needs parity
+tests, the original environment and checkpoints, data preparation scripts,
+and a verified full training/inference entry point to reproduce the paper
+numbers. See [the compatibility checklist](docs/REPRODUCIBILITY.md).
 
 ## Citation
 
-Jowaria Khan, Anindya Sarkar, Yevgeniy Vorobeychik, and Elizabeth Bondi-Kelly. *Adapting Actively on the Fly: Relevance-Guided Sequential Learning with Latent Concepts for Geospatial Discovery*. NeurIPS 2026.
+Jowaria Khan, Anindya Sarkar, Yevgeniy Vorobeychik, and Elizabeth Bondi-Kelly.
+*Adapting Actively on the Fly: Relevance-Guided Sequential Learning with Latent
+Concepts for Geospatial Discovery.* NeurIPS 2026.
+
+License will be specified after approval by the authors.
