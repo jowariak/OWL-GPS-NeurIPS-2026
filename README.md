@@ -77,17 +77,6 @@ committed to this repository.
 - Pseudo-labels may train the model, but reported evaluations should use
   independent measured ground-truth pixels.
 
-## Current release status
-
-**Modular research-code preparation, not yet an exact reproduction of the
-NeurIPS experiments.** Core architecture definitions have been carried over
-from the author's earlier `OWL-GPS_NeurIPS` script. Several pieces have been
-cleaned or made safer, including removal of code paths that accessed hidden
-candidate labels. Batch representative selection and optimizer scheduling
-are not identical to the historical script. The release still needs parity
-tests, the original environment and checkpoints, data preparation scripts,
-and a verified full training/inference entry point to reproduce the paper
-numbers. See [the compatibility checklist](docs/REPRODUCIBILITY.md).
 
 ## Citation
 
@@ -95,4 +84,4 @@ Jowaria Khan, Anindya Sarkar, Yevgeniy Vorobeychik, and Elizabeth Bondi-Kelly.
 *Adapting Actively on the Fly: Relevance-Guided Sequential Learning with Latent
 Concepts for Geospatial Discovery.* NeurIPS 2026.
 
-License will be specified after approval by the authors.
+
