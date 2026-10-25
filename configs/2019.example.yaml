@@ -1,0 +1,27 @@
+# Replace placeholders with your actual data and checkpoint directories.
+# Historical 2019 configuration: 33 one-band concept encoders, 256x256 pixels.
+data:
+  train_root: /path/to/train_2019
+  test_root: /path/to/test_2019
+  num_concepts: 33
+  image_size: 256
+  training_mask_dir: masks
+  observed_mask_dir: updated_masks_sparse
+model:
+  pretrained_concepts_manifest: /path/to/concept_checkpoints.txt
+  trained_components: /path/to/online_model.pth
+adaptation:
+  optimizer: adam
+  batch_construction: relevance_structured
+  core_capacity: 40
+  reservoir_capacity: 60
+  core_lifespan: 40
+  microbatch: 1
+  kl_weight: 0.0001
+  steps_per_round: 1
+acquisition:
+  train_budget: 150
+  train_round_size: 10
+  inference_budget: 50
+  inference_round_size: 5
+  labels_are_hidden_until_queried: true

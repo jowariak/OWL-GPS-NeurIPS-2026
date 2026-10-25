@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "owl-gps"
+version = "0.1.0"
+description = "Relevance-guided sequential geospatial learning"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "torch>=2.0"]
+
+[project.optional-dependencies]
+geo = ["rasterio>=1.3"]
+research = ["rasterio>=1.3", "scikit-learn>=1.2", "timm", "einops"]
+test = []
+
+[tool.setuptools.packages.find]
+include = ["owl_gps*"]
