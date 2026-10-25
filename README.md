@@ -28,7 +28,7 @@ concept-relevance representation guides both *where to acquire labels* and
 | `configs/2019.example.yaml` | Portable path/budget configuration template |
 | `examples/synthetic_demo.py` | Small CPU end-to-end smoke demonstration |
 | `tests/test_components.py` | Deterministic unit tests |
-| `docs/REPRODUCIBILITY.md` | Reproduction requirements and implementation differences |
+
 
 ## Install
 
