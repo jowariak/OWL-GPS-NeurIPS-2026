@@ -1,7 +1,20 @@
-"""Bounded memory and relevance-structured meta-batch construction."""
+"""Original OWL-GPS memory policy, cleaned and made testable.
+
+Based on the uploaded icml2019test(1).py:
+- core samples age one tick per acquisition and expire at duration >= 40;
+- expired samples pass into a bounded reservoir;
+- refresh relevance before PCA/GIA when an encoder callback is available;
+- one duration/count-ranked sample per GIA cluster (up to four);
+- up to three duration/(count+1)-ranked reservoir observations;
+- fill to seven from additional core representatives;
+- optionally inject up to three low-use acquired class-0 samples.
+No hidden labels are read by acquisition. A deliberate optional latest-sample
+override is available, but it is NOT present in the uploaded source.
+"""
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 import numpy as np
+from .clustering import greedy_intersection_clusters
 
 
 @dataclass
@@ -22,15 +35,16 @@ class BoundedMemory:
     core_lifespan: int = 40
     core: list[Observation] = field(default_factory=list)
     reservoir: list[Observation] = field(default_factory=list)
+    class0_usage: dict[str, int] = field(default_factory=dict)
 
     def add(self, observation: Observation):
-        """Add acquired sample before making an online update."""
+        """Insert newly queried observation, then age/evict retained memory."""
         if any(s.key == observation.key for s in self.core + self.reservoir):
             raise ValueError(f"Duplicate acquired observation: {observation.key}")
-        for s in self.core + self.reservoir:
-            s.duration += 1
+        for sample in self.core + self.reservoir:
+            sample.duration += 1
         self.core.append(observation)
-        # The original code discards the first sample reaching age 40.
+        # Source moved first expiring core entry on each acquisition.
         expired = next((s for s in self.core if s.duration >= self.core_lifespan), None)
         if expired is not None:
             self.core.remove(expired)
@@ -38,52 +52,100 @@ class BoundedMemory:
         while len(self.core) > self.core_capacity:
             self.reservoir.append(self.core.pop(0))
         while len(self.reservoir) > self.reservoir_capacity:
-            self.reservoir.pop(max(range(len(self.reservoir)),
-                                   key=lambda i: self.reservoir[i].duration))
+            # Original script evicts the oldest reservoir observation.
+            old = max(range(len(self.reservoir)),
+                      key=lambda i:self.reservoir[i].duration)
+            self.reservoir.pop(old)
 
-    def references(self):
-        """Acquisition references: core means plus up to 3 reservoir means."""
-        samples = self.core + self.reservoir[:3]
-        return [np.asarray(s.relevance) for s in samples]
+    def references(self, *, reservoir_sample=3, rng=None):
+        """Acquisition comparisons use all core means + 3 random reservoir means."""
+        refs = list(self.core)
+        if self.reservoir:
+            import random
+            generator = rng if rng is not None else random
+            refs += generator.sample(self.reservoir,
+                                     min(reservoir_sample,len(self.reservoir)))
+        return [np.asarray(s.relevance) for s in refs]
 
-    def meta_batch(self, *, clusters: int = 4, reservoir_topk: int = 3,
-                   include_latest: bool = True, extra_class0: int = 0):
-        """Construct direct online-update batch.
+    def refresh_relevance(self, encoder: Callable[[Observation], Any]):
+        """Recompute stored mean embeddings after model updates, as source did."""
+        for s in self.core + self.reservoir:
+            s.relevance = np.asarray(encoder(s)).reshape(-1)
 
-        Deterministic relevance-space representative selection. The original
-        script uses custom greedy-intersection clustering following PCA; this
-        simplified representative allocation is NOT bitwise equivalent.
-        Reservoir items are ranked by lifespan/(usage+1), as in the script.
+    def meta_batch(self, *, clusters=4, reservoir_topk=3, epsilon=None,
+                   include_latest=False, extra_class0=3, min_batch=7,
+                   relevance_encoder=None):
+        """Construct the meta-batch used for ONE aggregated Adam update.
+
+        include_latest=True is an optional safety guarantee, not part of this
+        uploaded 2019 implementation. Original script uses GIA core clustering,
+        age/count ranking, up to 3 reservoir, then core fill; the source's
+        class-0 injections look only at ACQUIRED masks, which is permissible.
         """
         if not self.core:
             return []
-        if clusters < 1:
-            raise ValueError("clusters must be positive")
-        ranked = sorted(self.core, key=lambda s: s.duration / max(1, s.count),
-                        reverse=True)
-        # Greedy diversity in stored relevance space.
-        selected = [ranked[0]]
-        while len(selected) < min(clusters, len(ranked)):
-            remaining = [s for s in ranked if s.key not in {t.key for t in selected}]
-            candidate = max(remaining, key=lambda s: min(
-                np.linalg.norm(np.asarray(s.relevance) - np.asarray(t.relevance))
-                for t in selected))
-            selected.append(candidate)
-        reservoir = sorted(self.reservoir, key=lambda s: s.duration/(s.count+1),
-                           reverse=True)[:reservoir_topk]
-        for obs in reservoir:
-            if obs.key not in {s.key for s in selected}:
-                selected.append(obs)
-        if include_latest and self.core[-1].key not in {s.key for s in selected}:
-            selected.append(self.core[-1])
-        # Experimental scripts sometimes inject class-0 samples using acquired
-        # memory labels, not unqueried labels. No new labels are exposed.
+        if relevance_encoder is not None:
+            self.refresh_relevance(relevance_encoder)
+
+        matrix = np.stack([np.asarray(s.relevance).reshape(-1) for s in self.core])
+        groups = greedy_intersection_clusters(matrix, k=clusters, epsilon=epsilon)
+        selected = []
+        used = set()
+
+        def add_unique(obs):
+            if obs.key in used:
+                return False
+            selected.append(obs)
+            used.add(obs.key)
+            return True
+
+        # Source used duration/count (not count+1) for core representative rank.
+        for group in groups:
+            indices = sorted(group, key=lambda i:
+                             self.core[i].duration/max(1,self.core[i].count),
+                             reverse=True)
+            for i in indices:
+                if add_unique(self.core[i]):
+                    break
+
+        reservoir_ranked = sorted(
+            self.reservoir,
+            key=lambda s:s.duration/(s.count+1),
+            reverse=True)
+        for s in reservoir_ranked[:reservoir_topk]:
+            add_unique(s)
+
+        # Source fills toward seven when reservoir is too small.
+        if len(selected)<min_batch:
+            for group in groups:
+                for idx in sorted(group, key=lambda i:
+                    self.core[i].duration/max(1,self.core[i].count), reverse=True):
+                    if len(selected)>=min_batch:
+                        break
+                    add_unique(self.core[idx])
+                if len(selected)>=min_batch:
+                    break
+
+        # Acquired observations only; no oracle search over unqueried samples.
         if extra_class0:
-            candidates = [s for s in self.core + self.reservoir
-                          if s.key not in {v.key for v in selected}
-                          and hasattr(s.measured_label, "eq")
-                          and bool((s.measured_label == 0).any())]
-            selected += sorted(candidates, key=lambda s: s.count)[:extra_class0]
-        for obs in selected:
-            obs.count += 1
+            def is_class0(obs):
+                mask = obs.pseudo_label
+                if mask is None:
+                    return False
+                try:
+                    return bool((mask == 0).any())
+                except (TypeError, AttributeError):
+                    return bool(np.asarray(mask == 0).any())
+            candidates = sorted(
+                (s for s in self.core+self.reservoir if is_class0(s)),
+                key=lambda s:self.class0_usage.get(s.key,0))
+            for obs in candidates[:extra_class0]:
+                if add_unique(obs):
+                    self.class0_usage[obs.key]=self.class0_usage.get(obs.key,0)+1
+
+        if include_latest:
+            # An opt-in explicit guarantee, not implemented in the uploaded file.
+            add_unique(self.core[-1])
+        for sample in selected:
+            sample.count += 1
         return selected
