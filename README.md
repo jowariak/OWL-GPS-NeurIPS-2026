@@ -23,7 +23,7 @@ concept-relevance representation guides both *where to acquire labels* and
 | `owl_gps/model.py` | Concept fusion and original 2019-model builder |
 | `owl_gps/data.py` | Aligned band TIFFs, pseudo-labels and measured labels |
 | `owl_gps/acquisition.py` | Label-blind concept-guided query scoring |
-| `owl_gps/memory.py` | Core/reservoir replay memory and relevance-structured meta-batches |
+| `owl_gps/clustering.py` | PCA and adaptive-epsilon greedy-intersection clustering (GIA) ported from original research script |\n| `owl_gps/memory.py` | Core/reservoir policy, GIA representative selection, historical class-0 replay augmentation |
 | `owl_gps/adaptation.py` | Direct Adam updates on acquired relevance-structured batches |
 | `owl_gps/losses.py` | Binary focal loss and relevance CVAE KL loss |
 | `owl_gps/metrics.py` | Evaluation at measured pixels only |
