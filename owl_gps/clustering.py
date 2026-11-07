@@ -1,107 +1,178 @@
-"""Greedy-intersection clustering (GIA) from icml2019test(1).py.
+"""PCA + adaptive-epsilon Greedy Intersection Algorithm (GIA).
 
-Implements the uploaded fast greedy intersection, followed by the original
-nearest-representative assignment. PCA is applied separately to the core
-relevance vectors, never to labels. The source fixed 7 PCA dimensions, which
-fails for <8 retained observations; here we use min(7,n-1,d) until memory
-grows, making the startup phase well-defined.
+Faithful port of the ACTIVE clustering path in icml2019test(1).py:
+ FOMLTrainer.update_clusters -> PCA(n_components=7)
+ select_representive_committeee -> greedy clusters + nearest assignment
+ choose_eps_for_target_coverage -> median spacing, 80%-coverage target
+ select_representatives_intersectionss_fast -> axis-wise greedy intersections
+
+This is the fast greedy-intersection variant, NOT the unused exponential-time
+Cartesian-product intersection function also present in the research script.
+Identical relevance vectors retain separate buffer IDs: the source's vector
+deduplication could otherwise make cluster indices point at wrong observations.
 """
 from __future__ import annotations
+
+from collections.abc import Mapping
 import numpy as np
+from sklearn.decomposition import PCA
 
 
-def _greedy_intersection(points: dict[int, np.ndarray], epsilon: float):
-    """Greedy axis-wise maximum intersection, as in the uploaded source."""
+def axis_coverage_sets(points: Mapping[int, np.ndarray], epsilon: float):
+    """Exactly the source's per-axis, 2*epsilon coverage-set construction."""
     if not points:
-        return np.array([]), set()
-    indices_all = set(points)
-    d = len(next(iter(points.values())))
-    current = indices_all.copy()
-    for dim in range(d):
-        ranked = sorted(points, key=lambda i: points[i][dim])
-        coverage_sets = []
-        prior = set()
-        for position, index in enumerate(ranked):
-            coverage = {index}
-            for j in range(position - 1, -1, -1):
-                previous = ranked[j]
-                if points[index][dim] <= points[previous][dim] + 2 * epsilon:
-                    coverage.add(previous)
+        raise ValueError("points must not be empty")
+    if epsilon < 0:
+        raise ValueError("epsilon must be nonnegative")
+    dimension = len(next(iter(points.values())))
+    coverage_sets = []
+    for axis in range(dimension):
+        ranked = sorted(points.items(), key=lambda item: item[1][axis])
+        coverage_list = [[index] for index, _ in ranked]
+        axis_sets = [set(coverage_list[0])]
+        for i in range(1, len(ranked)):
+            index_i = coverage_list[i][0]
+            for j in range(i - 1, -1, -1):
+                index_j = coverage_list[j][0]
+                if points[index_i][axis] <= points[index_j][axis] + 2 * epsilon:
+                    coverage_list[i].append(index_j)
                 else:
                     break
-            if not coverage_sets:
-                coverage_sets.append(coverage)
-            elif coverage_sets[-1].issubset(coverage):
-                coverage_sets[-1] = coverage
+            candidate = set(coverage_list[i])
+            if axis_sets[-1] <= candidate:
+                axis_sets[-1] = candidate
             else:
-                coverage_sets.append(coverage)
-        best = max(coverage_sets, key=lambda s: len(s & current))
-        new_current = current & best
-        if not new_current:
-            new_current = set(best)  # exact legacy fallback
-        current = new_current
-    if not current:
-        current = {min(points)}
-    return np.mean([points[i] for i in sorted(current)], axis=0), current
+                axis_sets.append(candidate)
+        coverage_sets.append(axis_sets)
+    return coverage_sets
 
 
-def _adaptive_epsilon(points: dict[int, np.ndarray]) -> float:
-    """Source's adaptive spacing and target-first-cluster coverage (80%)."""
-    values = np.stack(list(points.values()))
-    spacings = [np.median(np.diff(np.sort(values[:,i])))
-                for i in range(values.shape[1]) if len(values) > 1]
-    typical = float(np.median(spacings)) if spacings else 0.
-    base = float(np.clip(2*typical, 1e-3, .5))
-    best_eps, best_coverage = base, -1
-    for multiplier in (.5, 1., 2., 4.):
-        eps = float(np.clip(multiplier*base, 1e-3, .5))
-        _, covered = _greedy_intersection(points, eps)
-        fraction = len(covered)/len(points)
-        if fraction > best_coverage:
-            best_coverage, best_eps = fraction, eps
-        if fraction >= .8:
-            break
-    return best_eps
+def greedy_intersection_representative(points: Mapping[int, np.ndarray],
+                                       epsilon: float):
+    """Exact greedy-intersection scoring and fallback from the fast source.
 
-
-def greedy_intersection_clusters(vectors, *, k=4, epsilon=None, pca_dims=7):
-    """Return clusters of ORIGINAL row indices for core-buffer selection.
-
-    Mirrors the script: PCA reduction; k repeated greedy intersections;
-    nearest-cluster assignment for uncovered observations. Preserve duplicate
-    vectors as different observations, fixing source's index-loss on dedup.
+    Each axis chooses the coverage set with maximum overlap with the
+    surviving observations. If overlap is empty, reset to the chosen set.
+    Representative = mean of actually covered relevance vectors.
     """
-    data = np.asarray(vectors, dtype=float)
-    if data.ndim != 2 or not len(data):
-        raise ValueError("vectors must be a nonempty 2-D array")
+    if not points:
+        raise ValueError("points must not be empty")
+    coverage_sets = axis_coverage_sets(points, epsilon)
+    all_indices = set(points)
+    current = all_indices.copy()
+    for axis_sets in coverage_sets:
+        best_set = None
+        best_size = -1
+        for candidate in axis_sets:
+            overlap = candidate & current
+            if len(overlap) > best_size:
+                best_size = len(overlap)
+                best_set = candidate
+        if best_set is None:
+            best_set = all_indices
+        intersection = current & best_set
+        current = intersection if intersection else best_set.copy()
+    if not current:
+        current = max((s for axis in coverage_sets for s in axis),
+                      key=len).copy()
+    representative = np.stack([
+        np.asarray(points[index], dtype=float)
+        for index in sorted(current)
+    ]).mean(axis=0)
+    return representative, current
+
+
+def adaptive_epsilon_from_spacings(points: Mapping[int, np.ndarray], *,
+                                   alpha: float = 2.0,
+                                   min_eps: float = 1e-3,
+                                   max_eps: float = 0.5) -> float:
+    """Source's median inter-point coordinate-spacing epsilon."""
+    if not points:
+        raise ValueError("points must not be empty")
+    values = np.stack([np.asarray(v, dtype=float) for v in points.values()])
+    spacings = []
+    for axis in range(values.shape[1]):
+        gaps = np.diff(np.sort(values[:, axis]))
+        if len(gaps):
+            spacings.append(np.median(gaps))
+    if not spacings:
+        return min_eps
+    return float(np.clip(alpha * np.median(spacings), min_eps, max_eps))
+
+
+def choose_epsilon_for_target_coverage(points: Mapping[int, np.ndarray], *,
+                                       base_alpha: float = 2.0,
+                                       target_fraction: float = 0.8,
+                                       min_eps: float = 1e-3,
+                                       max_eps: float = 0.5):
+    """Original epsilon sweep: factors 0.5, 1, 2, 4, early stop at 80%."""
+    base = adaptive_epsilon_from_spacings(
+        points, alpha=base_alpha, min_eps=min_eps, max_eps=max_eps)
+    best_eps, best_fraction = base, 0.0
+    for factor in (0.5, 1.0, 2.0, 4.0):
+        epsilon = float(np.clip(factor * base, min_eps, max_eps))
+        _, covered = greedy_intersection_representative(points, epsilon)
+        fraction = len(covered) / len(points)
+        if fraction > best_fraction:
+            best_fraction, best_eps = fraction, epsilon
+        if fraction >= target_fraction:
+            break
+    return best_eps, best_fraction
+
+
+def greedy_intersection_committee(vectors, *, k: int = 4,
+                                  epsilon: float | None = None):
+    """Original repeated greedy intersections and nearest-cluster assignment.
+
+    Input vectors are already PCA-reduced. Every original buffer row retains
+    its ID, unlike research source's unsafe deduplication step.
+    """
+    reduced = np.asarray(vectors, dtype=float)
+    if reduced.ndim != 2 or len(reduced) == 0:
+        raise ValueError("vectors must be a nonempty two-dimensional array")
     if k < 1:
         raise ValueError("k must be positive")
-    if len(data) == 1:
-        return [{0}]
-    # sklearn PCA requires n_components <= min(n_samples,n_features).
-    dims = min(pca_dims, len(data)-1, data.shape[1])
-    if dims >= 1:
-        from sklearn.decomposition import PCA
-        projected = PCA(n_components=dims).fit_transform(data)
-    else:
-        projected = data
-    point_map = {i:projected[i] for i in range(len(data))}
-    eps = _adaptive_epsilon(point_map) if epsilon is None else float(epsilon)
-    if eps < 0:
+    if epsilon is not None and epsilon < 0:
         raise ValueError("epsilon must be nonnegative")
-    remaining = dict(point_map)
-    clusters, representatives = [], []
-    for _ in range(min(k,len(data))):
+
+    remaining = {i: reduced[i] for i in range(len(reduced))}
+    if epsilon is None:
+        epsilon, _ = choose_epsilon_for_target_coverage(remaining)
+    representatives = []
+    groups = []
+    for _ in range(min(k, len(reduced))):
         if not remaining:
             break
-        representative, covered = _greedy_intersection(remaining, eps)
-        if not covered:
-            break
-        clusters.append(set(covered))
+        representative, covered = greedy_intersection_representative(
+            remaining, epsilon)
         representatives.append(representative)
+        groups.append(set(covered))
         for idx in covered:
             remaining.pop(idx, None)
-    for idx, v in remaining.items():
-        distances = [np.linalg.norm(v-r) for r in representatives]
-        clusters[int(np.argmin(distances))].add(idx)
-    return clusters
+
+    for idx, vector in remaining.items():
+        distances = [np.linalg.norm(vector - rep) for rep in representatives]
+        groups[int(np.argmin(distances))].add(idx)
+    return groups
+
+
+def greedy_intersection_clusters(vectors, *, k: int = 4,
+                                 epsilon: float | None = None,
+                                 pca_dims: int = 7):
+    """Core-buffer clustering: PCA(7) -> fast GIA -> original row-index sets.
+
+    Original source crashes when retained observations are fewer than seven;
+    in that case, reduce PCA dimensionality for a stable warm-up.
+    """
+    data = np.asarray(vectors, dtype=float)
+    if data.ndim != 2 or len(data) == 0:
+        raise ValueError("vectors must be a nonempty two-dimensional array")
+    if k < 1 or pca_dims < 1:
+        raise ValueError("k and pca_dims must be positive")
+    if len(data) == 1:
+        return [{0}]
+    dimensions = min(pca_dims, len(data), data.shape[1])
+    if len(data) < pca_dims:
+        dimensions = min(dimensions, len(data)-1)
+    reduced = PCA(n_components=dimensions).fit_transform(data)
+    return greedy_intersection_committee(reduced, k=k, epsilon=epsilon)
