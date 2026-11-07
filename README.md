@@ -4,7 +4,9 @@
 
 **NeurIPS 2026** · Jowaria Khan, Anindya Sarkar, Yevgeniy Vorobeychik, Elizabeth Bondi-Kelly
 
-[Project page](https://jowariak.github.io/OWL-GPS/) · [Paper](https://jowariak.github.io/OWL-GPS/paper.pdf)
+
+[Project page](https://jowariak.github.io/OWL-GPS/) · [Paper](https://jowariak.github.io/OWL-GPS/paper.pdf) · [Dataset](https://doi.org/10.7302/zzpc-2s61)
+
 
 OWL-GPS studies budgeted sequential geospatial discovery under sparse
 supervision, distribution shift, and bounded replay memory. Its shared
@@ -76,6 +78,15 @@ committed to this repository.
 - Labels must remain hidden from acquisition until the query is made.
 - Pseudo-labels may train the model, but reported evaluations should use
   independent measured ground-truth pixels.
+
+
+## Dataset
+
+The PFAS geospatial dataset used in this study is available through the University of Michigan's Deep Blue Data repository.
+
+**Dataset:** [OWL-GPS PFAS Dataset: Multisource Geospatial Imagery and Sparse Ground-Truth Labels for Contamination Discovery](https://doi.org/10.7302/zzpc-2s61)
+
+**DOI:** [10.7302/zzpc-2s61](https://doi.org/10.7302/zzpc-2s61)
 
 
 ## Citation
