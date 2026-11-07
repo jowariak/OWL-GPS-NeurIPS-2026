@@ -65,20 +65,6 @@ with open("/path/to/concept_checkpoints.txt", encoding="utf-8") as f:
 model = build_original_2019_model(paths)
 ```
 
-Provide local dataset paths and normalization statistics through configuration,
-not hardcoded `/scratch` or `/nfs` strings. No raw data or model weights are
-committed to this repository.
-
-## Method notes
-
-- The implemented online update optimizes directly over acquired
-  relevance-structured **meta-batches**, rather than computing bilevel
-  meta-gradients or a separate newest-sample gradient.
-- Newly acquired observations enter bounded memory before batch construction.
-- Labels must remain hidden from acquisition until the query is made.
-- Pseudo-labels may train the model, but reported evaluations should use
-  independent measured ground-truth pixels.
-
 
 ## Dataset
 
