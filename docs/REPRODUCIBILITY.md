@@ -45,7 +45,7 @@ warns and requires caller-supplied hidden labels.
 Newly acquired samples enter the core buffer (duration=1,count=1); existing
 ages increment and expired entries pass into a capacity-limited reservoir.
 Core representations are refreshed from the model if a callback is supplied.
-A PCA reduction (up to 7 components) precedes adaptive-epsilon GIA.
+A PCA reduction (7 components once memory is sufficiently populated) precedes the original **fast greedy-intersection GIA**. It builds axis-wise coverage sets using a 2*epsilon window, greedily maximizes coverage-set intersection across axes, and iteratively removes covered observations for up to four representatives. Remaining observations are assigned to their nearest representative. Adaptive epsilon uses median inter-point spacing and an 80% target coverage sweep with factors 0.5, 1, 2, 4.
 One highest-duration/count representative per cluster is used, followed by
 up to 3 duration/(count+1)-ranked reservoir examples. If fewer than 7 are
 selected, additional core examples fill the batch. Optionally up to 3
@@ -68,3 +68,7 @@ running the complete published evaluation protocol and verifying parity.
 The code normalizes shapes and removes some source bugs (e.g., PCA
 dimension during memory warm-up and repeated/duplicate example choices).
 These safeguards improve usability but can affect edge-case behavior.
+
+## Verified GIA parity
+
+The active original code uses `select_representatives_intersectionss_fast`, **not** the older unused `select_representatives_intersectionss` Cartesian-product routine. The cleaned clustering module matches the active greedy coverage-set intersection, adaptive epsilon sweep, representative mean, and nearest-cluster reassignment. A standalone comparison against the function definitions extracted from the uploaded 2019 script passed 210 seeded random examples (8, 9, 12, 20, 39, 40 observations), comparing the epsilon, first representative, all cluster memberships and PCA+GIA results. Added regression fixtures in `tests/test_gia_parity.py`. The only deliberate differences are robust warm-up for fewer than 7 observations and preserving duplicate relevance observations as separate buffer records.
