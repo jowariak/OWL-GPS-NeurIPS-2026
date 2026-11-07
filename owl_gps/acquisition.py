@@ -77,23 +77,60 @@ def choose_candidates(candidates, references, *, step: int, budget: int,
     return ranked[:max(0, min(batch_size, len(ranked), budget-step))]
 
 def historical_oracle_class_balance(ranked, hidden_class_by_index, *,
-                                    step: int, every: int = 20):
-    """EXPERIMENTAL LEGACY/ORACLE MODE ONLY -- NOT VALID LABEL-BLIND SEARCH.
+                                    step: int, batch_size: int = 10,
+                                    every: int = 20):
+    """Reproduce *historical*, label-informed training query adjustment.
 
-    Reproduces the intention of original training's class-0 query adjustment.
-    Requires privileged labels for *unqueried* regions, so should not be used
-    for fair online discovery evaluation. Keep separate from default policy.
+    This requires knowing class-0 presence for UNQUERIED candidates. It
+    therefore violates label-blind discovery and must never be used in the
+    default policy or to claim label-blind acquisition performance.
+    ranked: entire pre-sorted pool (not the initial top-10).
+    hidden_class_by_index: 0 when the candidate contains a sparse class-0 label,
+        1 otherwise. Caller is responsible for supplying this privileged data.
     """
     import warnings
-    warnings.warn("Oracle class balancing accesses withheld query labels; "
-                  "do not use for label-blind benchmark reporting.", RuntimeWarning)
-    chosen = list(ranked)
+    warnings.warn(
+        "Historical oracle class balancing reads labels of unqueried regions; "
+        "not a valid label-blind acquisition method.", RuntimeWarning
+    )
+    if batch_size < 1 or every < 1:
+        raise ValueError("batch_size and every must be positive")
+    chosen = list(ranked[:batch_size])
+    alternatives = list(ranked[batch_size:])
+
+    def class0(c):
+        return hidden_class_by_index[c.index] == 0
+
     if not chosen:
-        return chosen
-    if step % every:
-        if not any(hidden_class_by_index[c.index] == 0 for c in chosen):
-            extra = next((idx for idx,v in hidden_class_by_index.items() if v == 0), None)
-            if extra is not None:
-                raise ValueError("Pass a full ranked candidate pool to reproduce "
-                                 "oracle class balancing; selected-only pool cannot force index")
+        return []
+    if step % every != 0:
+        # Original source: force a class-0 region when top-10 has none.
+        if not any(class0(c) for c in chosen):
+            forced = next((c for c in ranked if class0(c)), None)
+            if forced is not None:
+                chosen[-1] = forced
+        # Original source: allow at most one class-0 acquired this round.
+        have_zero = False
+        for i, c in enumerate(list(chosen)):
+            if not class0(c):
+                continue
+            if have_zero:
+                replacement = next(
+                    (a for a in alternatives
+                     if not class0(a) and a.index not in {q.index for q in chosen}),
+                    None)
+                if replacement is not None:
+                    chosen[i] = replacement
+            else:
+                have_zero = True
+    else:
+        # Every 20 acquisitions, source attempts to replace all class-0 regions.
+        for i, c in enumerate(list(chosen)):
+            if class0(c):
+                replacement = next(
+                    (a for a in alternatives
+                     if not class0(a) and a.index not in {q.index for q in chosen}),
+                    None)
+                if replacement is not None:
+                    chosen[i] = replacement
     return chosen
